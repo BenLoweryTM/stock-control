@@ -1,0 +1,12 @@
+cloudpickle==3.1.2
+Farama-Notifications==0.0.4
+gymnasium==0.29.1
+inventorygyms @ git+https://github.com/BenSLowery/InventoryGyms.git@c591180e8c7724684600fb9c85ed4d994a27d959
+numpy==2.4.2
+one_period_shortage @ git+https://github.com/BenSLowery/one_period_shortage@06cf9a3bdfccf3356c4806103bdab2608a84bb2e
+pandas==3.0.0
+pyarrow==23.0.1
+python-dateutil==2.9.0.post0
+scipy==1.17.0
+six==1.17.0
+typing_extensions==4.15.0
