@@ -64,7 +64,7 @@ if __name__ == "__main__":
         "holding_store": 3,
         "initial_inventory": [[50, 0], [22,0], [20,0], [18,0], [16,0], [14,0]],
         "online_demand_params": [12 for i in range(16)],
-        "store_demand_params": [[6 for i in range(15)] for _ in range(5)],
+        "store_demand_params": [[6 for i in range(16)] for _ in range(5)],
         "demand_distribution": ['Poisson' for p in range(6)],
         "dfw_chance": 0.8,
     }
