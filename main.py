@@ -1,34 +1,74 @@
-# Test the dfw model w/ Transhipments works: namely ESR
 import gymnasium as gym
-import inventorygyms
-import inventorygyms.wrappers.transhipment.ESR_rust as ESR
+import inventorygyms  # noqa: F401
+import inventorygyms.wrappers.transhipment.lookahead as LA
 import numpy as np
+import scipy.stats as sp
+import pandas as pd
+import sys
 
-params = {
-    'periods': 10, 
-    'stores': 4,
-    'lead_time': [1,1,0],
-    'ts_cost': 1,
-    'penalty': 9,
-    'initial_inventory': [[10,10],[12,0],[7,0],[6,0], [9,0]],
-    'online_demand_params': [0 for i in range(10)],
-    'store_demand_params': [[(6,0.375) for i in range(10)] for t in range(4)],
-    'dfw_chance': 0.8,
-    'demand_distribution': ['Poisson'] + ['Negative Binomial' for i in range(4)],
-}
-out = {'warehouse': 100, 'store': [10,10,7,8], 'r': [6,7,8,9]}
-env_2 = gym.make('inventorygyms/TwoEchelonPLSTS-v0', **params)
+def run_la_instance(instance):
+        # Create the environment
+        env_all = gym.make('inventorygyms/TwoEchelonPLSTS-v0', **instance)
 
-trans_env = ESR.ts_ESR(env_2)
+        # Wrap with transhipment policy (in this case, ESR: but we will have no transhipments)
+        wrapped_env = LA.ts_la(env_all)
+        wrapped_env.reset()
+        # Run Iterations
+        sims = 50
+        info_pd = []
+        for sim in range(sims):
+            print(sim)
+            overall_costs = []
+            terminated = False
+            sim_cost = []
+            T = 0
 
-terminated = False
-cost = []
-j=0
-while not terminated:
-    print('Period: {}'.format(j))
-    j+=1
-    # Generate action
-    action = trans_env.generate_action('Capped', out, True)
 
-    # Take a step in time.
-    observation, reward, terminated, truncated, info = trans_env.step(action)
+            while not terminated:
+                out_all = {
+                    'warehouse': 0,
+                }
+                # Generate action
+                action = wrapped_env.generate_action(out_all['warehouse'], True,'RegBS')
+                # Take a step in time.
+                observation, reward, terminated, truncated, info = wrapped_env.step(action)
+                info['run'] = sim+1
+                info['period'] = T
+                sim_cost.append(-reward)
+                T+=1
+                info_pd.append(info)
+            overall_costs.append(np.sum(sim_cost))
+            wrapped_env.reset()
+
+        # DF runs
+        df_run_infos = pd.DataFrame(info_pd)
+        df_run_infos['Starting Inv. Store'] = [[d[i][0] for i in range(instance['stores'])] for d in df_run_infos['Starting Inv. Store']]
+        df_run_infos['Ending Inventory Store'] = [[d[i][0] for i in range(instance['stores'])] for d in df_run_infos['Ending Inventory Store']]
+        df_run_infos['Starting Inv. Warehouse'] = [d[0]for d in df_run_infos['Starting Inv. Warehouse']]
+        df_run_infos['Ending Inventory Warehouse'] = [d[0]for d in df_run_infos['Ending Inventory Warehouse']]
+        return df_run_infos
+
+
+
+if __name__ == "__main__":
+    instance = {
+        "periods": 16,
+        "stores": 5,
+        "lead_time": [1, 1, 0],
+        "warehouse_capacity": 250,
+        "cluster_assignment": [1,2,1,1,2],
+        "ts_cost_for_cluster": [1,2],
+        "dfw_cost": 0,
+        "penalty": 18,
+        "holding_warehouse": 2,
+        "holding_store": 3,
+        "initial_inventory": [[50, 0], [22,0], [20,0], [18,0], [16,0], [14,0]],
+        "online_demand_params": [12 for i in range(16)],
+        "store_demand_params": [[6 for i in range(15)] for _ in range(5)],
+        "demand_distribution": ['Poisson' for p in range(6)],
+        "dfw_chance": 0.8,
+    }
+    res = run_la_instance(instance)
+
+    print(res)
+
