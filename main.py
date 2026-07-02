@@ -57,7 +57,7 @@ if __name__ == "__main__":
         "lead_time": [1, 1, 0],
         "warehouse_capacity": 250,
         "cluster_assignment": [1,2,1,1,2],
-        "ts_cost_for_cluster": [1,2],
+        "ts_cost_for_cluster": {1: 1,2: 3},
         "dfw_cost": 0,
         "penalty": 18,
         "holding_warehouse": 2,
