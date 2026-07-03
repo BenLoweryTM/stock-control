@@ -17,7 +17,6 @@ def run_la_instance(instance):
         sims = 150
         info_pd = []
         for sim in range(sims):
-            print(sim)
             overall_costs = []
             terminated = False
             sim_cost = []
