@@ -3,5 +3,5 @@
 #SBATCH -c 10
 #SBATCH -o ./realdataoutput.out
 
-srun uv run ~/storm/storm_test.py 9
+srun uv run ./storm/storm_test.py 9
 

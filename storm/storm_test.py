@@ -70,5 +70,5 @@ if __name__ == "__main__":
     }
     res = run_la_instance(instance)
 
-    res.to_parquet('~/results/la_instance_results.parquet')
+    res.to_parquet('./results/la_instance_results.parquet')
 
