@@ -14,7 +14,7 @@ def run_la_instance(instance):
         wrapped_env = LA.ts_la(env_all)
         wrapped_env.reset()
         # Run Iterations
-        sims = 50
+        sims = 150
         info_pd = []
         for sim in range(sims):
             print(sim)
