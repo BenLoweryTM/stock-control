@@ -3,5 +3,5 @@
 #SBATCH -c 10
 #SBATCH -o ./output_scripts/%A_real_data_output.out
 
-srun uv run ./storm/storm_test.py 9
+srun time uv run ./storm/storm_test.py 9
 
