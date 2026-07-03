@@ -5,7 +5,7 @@ import numpy as np
 import scipy.stats as sp
 import pandas as pd
 import sys
-
+ 
 def run_la_instance(instance):
         # Create the environment
         env_all = gym.make('inventorygyms/TwoEchelonPLSTS-v0', **instance)
