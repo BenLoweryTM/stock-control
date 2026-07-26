@@ -14,6 +14,7 @@ dependencies = [
     "one-period-shortage",
     "optimalpolicy",
     "pyarrow>=24.0.0",
+    "optuna>=4.9.0",
 ]
 
 [tool.uv.sources]
