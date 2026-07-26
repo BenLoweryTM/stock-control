@@ -1,7 +1,7 @@
 """
 Usage
 -----------------
-    python tests/test_optuna_study.py --jobs 8 --trials 100
+    uv run ./tests/test_optuna_study.py --jobs 8 --trials 100
 
 """
 
@@ -24,7 +24,7 @@ BASE_INSTANCE = {
     "periods": 14,
     "stores": 5,
     "lead_time": [1, 1, 0],
-    "warehouse_capacity": 100,
+    "warehouse_capacity": 250,
     "cluster_assignment": [1, 1, 1, 1, 1],
     "ts_cost_for_cluster": {1: 4.0},
     "dfw_cost": 0,
@@ -110,7 +110,7 @@ def objective(trial: optuna.Trial) -> float:
     Extend with additional trial.suggest_* calls to tune other parameters,
     e.g. store base-stock levels, penalty costs, holding costs.
     """
-    warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, 50)
+    warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, 200)
 
     # --- optional: tune instance-level parameters ---
     # penalty = trial.suggest_float("penalty", 5.0, 40.0)
@@ -214,4 +214,5 @@ if __name__ == "__main__":
 
     df = trials_to_dataframe(study)
     print("\n Trial results:")
-    print(df)
+    print(df.head(5))
+    df.to_csv('../results/test.csv')
