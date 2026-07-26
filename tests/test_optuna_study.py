@@ -6,10 +6,9 @@ Usage
 """
 
 import argparse
-import os
 import threading
+from functools import partial
 from multiprocessing import cpu_count
-
 import gymnasium as gym
 import inventorygyms  # noqa: F401
 import inventorygyms.wrappers.transhipment.lookahead as LA
@@ -93,13 +92,22 @@ def run_simulation(instance: dict, warehouse_order_up_to: int, seed: int = 42) -
         all_period_costs.append(float(np.sum(sim_costs)))
         wrapped_env.reset()
 
-    return float(np.mean(all_period_costs))
+    # Find the 95% credible interval of the mean total cost
+    lower_bound = np.mean(all_period_costs) - 1.96 * np.std(all_period_costs) / np.sqrt(N_SIMS)
+    upper_bound = np.mean(all_period_costs) + 1.96 * np.std(all_period_costs) / np.sqrt(N_SIMS)
+    print(f"95% confidence interval for {warehouse_order_up_to}: [{lower_bound}, {upper_bound}]")
 
+    
+    # Return the mean per-period cost
+    # (lower is better)
+    return np.mean(all_period_costs)
+
+    return float(np.mean(all_period_costs))
 
 # ---------------------------------------------------------------------------
 # Optuna objective
 # ---------------------------------------------------------------------------
-def objective(trial: optuna.Trial) -> float:
+def objective(trial: optuna.Trial, instance_params: dict) -> float:
     """
     Optuna objective function.
 
@@ -110,12 +118,12 @@ def objective(trial: optuna.Trial) -> float:
     Extend with additional trial.suggest_* calls to tune other parameters,
     e.g. store base-stock levels, penalty costs, holding costs.
     """
-    warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, 200)
+    warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 20, 40)
 
     # --- optional: tune instance-level parameters ---
     # penalty = trial.suggest_float("penalty", 5.0, 40.0)
     # instance = {**BASE_INSTANCE, "penalty": penalty}
-    instance = BASE_INSTANCE
+    instance = instance_params
 
     # Use trial.number as seed — unique per trial, deterministic across runs
     return run_simulation(instance, warehouse_order_up_to, seed=trial.number)
@@ -128,6 +136,7 @@ def run_study(
     n_trials: int = 50,
     n_jobs: int = 1,
     study_name: str = STUDY_NAME,
+    instance_params: dict = BASE_INSTANCE,
 ) -> optuna.Study:
     """
     Create and run an Optuna study using n_jobs parallel threads.
@@ -160,7 +169,7 @@ def run_study(
     print(f"Running {n_trials} trials with n_jobs={effective_jobs}")
 
     study.optimize(
-        objective,
+        partial(objective, instance_params=instance_params),
         n_trials=n_trials,
         n_jobs=n_jobs,
         gc_after_trial=True,
@@ -208,6 +217,7 @@ if __name__ == "__main__":
         n_trials=args.trials,
         n_jobs=args.jobs,
         study_name=args.study,
+        instance_params=BASE_INSTANCE,  # Eventually we will replace with actual parameter instances we generated
     )
 
     print_study_summary(study)
