@@ -118,7 +118,7 @@ def objective(trial: optuna.Trial, instance_params: dict) -> float:
     Extend with additional trial.suggest_* calls to tune other parameters,
     e.g. store base-stock levels, penalty costs, holding costs.
     """
-    warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 20, 40)
+    warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, 200)
 
     # --- optional: tune instance-level parameters ---
     # penalty = trial.suggest_float("penalty", 5.0, 40.0)
