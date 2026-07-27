@@ -10,6 +10,7 @@ import threading
 from functools import partial
 from multiprocessing import cpu_count
 import gymnasium as gym
+from joblib import Parallel, delayed
 import inventorygyms  # noqa: F401
 import inventorygyms.wrappers.transhipment.lookahead as LA
 import numpy as np
@@ -42,21 +43,16 @@ N_SIMS = 5000
 
 STUDY_NAME = "inventory_tuning"
 
-# Thread-local storage ensures each thread owns its own gym environment,
-# avoiding any shared-state issues between concurrent trials.
-_thread_local = threading.local()
-
 
 # ---------------------------------------------------------------------------
 # Simulation runner
 # ---------------------------------------------------------------------------
-def _get_env(instance: dict) -> LA.ts_la:
-    """Return a thread-local wrapped environment, creating it on first use."""
-    if not hasattr(_thread_local, "wrapped_env"):
-        env = gym.make("inventorygyms/TwoEchelonPLSTS-v0", **instance)
-        _thread_local.wrapped_env = LA.ts_la(env)
-        _thread_local.wrapped_env.reset()
-    return _thread_local.wrapped_env
+def _create_env(instance: dict) -> LA.ts_la:
+    """Create a fresh wrapped environment (safe for multiprocessing)."""
+    env = gym.make("inventorygyms/TwoEchelonPLSTS-v0", **instance)
+    wrapped_env = LA.ts_la(env)
+    wrapped_env.reset()
+    return wrapped_env
 
 
 def run_simulation(instance: dict, warehouse_order_up_to: int, seed: int = 42) -> float:
@@ -77,7 +73,7 @@ def run_simulation(instance: dict, warehouse_order_up_to: int, seed: int = 42) -
     float
         Mean per-period cost (lower is better).
     """
-    wrapped_env = _get_env(instance)
+    wrapped_env = _create_env(instance)
     wrapped_env.reset(seed=seed)
 
     all_period_costs: list[float] = []
@@ -93,16 +89,15 @@ def run_simulation(instance: dict, warehouse_order_up_to: int, seed: int = 42) -
         wrapped_env.reset()
 
     # Find the 95% credible interval of the mean total cost
-    lower_bound = np.mean(all_period_costs) - 1.96 * np.std(all_period_costs) / np.sqrt(N_SIMS)
-    upper_bound = np.mean(all_period_costs) + 1.96 * np.std(all_period_costs) / np.sqrt(N_SIMS)
-    print(f"95% confidence interval for {warehouse_order_up_to}: [{lower_bound}, {upper_bound}]")
+    # lower_bound = np.mean(all_period_costs) - 1.96 * np.std(all_period_costs) / np.sqrt(N_SIMS)
+    # upper_bound = np.mean(all_period_costs) + 1.96 * np.std(all_period_costs) / np.sqrt(N_SIMS)
+    # print(f"95% confidence interval for {warehouse_order_up_to}: [{lower_bound}, {upper_bound}]")
 
     
     # Return the mean per-period cost
     # (lower is better)
     return np.mean(all_period_costs)
 
-    return float(np.mean(all_period_costs))
 
 # ---------------------------------------------------------------------------
 # Optuna objective
@@ -130,6 +125,59 @@ def objective(trial: optuna.Trial, instance_params: dict) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Parallel trial executor (module-level for pickling with joblib)
+# ---------------------------------------------------------------------------
+def run_replication_chunk(
+    chunk_id: int,
+    warehouse_order_up_to: int,
+    instance_params: dict,
+    trial_seed: int,
+    chunk_size: int,
+    n_sims: int,
+) -> list[float]:
+    """
+    Run a chunk of Monte Carlo replications in parallel.
+    
+    This must be at module level (not nested) to be picklable by joblib.
+    
+    Parameters
+    ----------
+    chunk_id : int
+        Which chunk (0, 1, 2, ...) to identify which replications to run.
+    warehouse_order_up_to : int
+        Parameter value for this trial.
+    instance_params : dict
+        Instance configuration.
+    trial_seed : int
+        Base seed for reproducibility.
+    chunk_size : int
+        Number of replications per chunk.
+    n_sims : int
+        Total replications (to handle last chunk correctly).
+    
+    Returns
+    -------
+    list[float]
+        Total costs for each replication in this chunk.
+    """
+    costs = []
+    env = _create_env(instance_params)
+    n_reps = chunk_size if chunk_id < (n_sims // chunk_size) else n_sims - (chunk_id * chunk_size)
+    env.reset(seed=trial_seed + chunk_id)
+    for _ in range(n_reps):
+        sim_costs = []
+        terminated = False
+        while not terminated:
+            action = env.generate_action(warehouse_order_up_to, True, "RegBS")
+            _, reward, terminated, _, _ = env.step(action)
+            sim_costs.append(-reward)
+        costs.append(float(np.sum(sim_costs)))
+        env.reset()
+    
+    return costs
+
+
+# ---------------------------------------------------------------------------
 # Study entry-point
 # ---------------------------------------------------------------------------
 def run_study(
@@ -139,17 +187,24 @@ def run_study(
     instance_params: dict = BASE_INSTANCE,
 ) -> optuna.Study:
     """
-    Create and run an Optuna study using n_jobs parallel threads.
+    Create and run an Optuna study with joblib multiprocessing.
+    
+    Strategy:
+    - Optuna's TPE sampler suggests parameter values (n_trials times)
+    - Each parameter suggestion is evaluated using joblib to parallelize
+      the N_SIMS Monte Carlo replications
+    - This allows true multiprocessing while respecting Optuna's optimization
 
     Parameters
     ----------
     n_trials:
         Total number of Optuna trials to run.
     n_jobs:
-        Number of parallel threads passed to study.optimize().
-        1 = sequential, -1 = use all available cores.
+        Number of parallel processes for replications (1 = sequential, -1 = all cores).
     study_name:
         Human-readable name for the study.
+    instance_params:
+        Instance configuration dict.
 
     Returns
     -------
@@ -166,14 +221,51 @@ def run_study(
     )
 
     effective_jobs = cpu_count() if n_jobs == -1 else n_jobs
-    print(f"Running {n_trials} trials with n_jobs={effective_jobs}")
+    
+    print(f"Running {n_trials} trials")
+    print(f"Parallelizing {N_SIMS} replications per trial across {effective_jobs} processes")
 
+    def parallel_objective(trial: optuna.Trial) -> float:
+        """
+        Objective function: Optuna controls trial parameters, 
+        we parallelize replication sampling with joblib.
+        """
+        warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, 200)
+        
+        if effective_jobs == 1:
+            # Sequential: just run normally
+            return run_simulation(instance_params, warehouse_order_up_to, seed=trial.number)
+        else:
+            # Parallel: split N_SIMS replications across processes
+            chunk_size = max(1, N_SIMS // effective_jobs)
+            n_chunks = effective_jobs
+            
+            # Parallelize replication sampling using module-level function
+            replication_results = Parallel(
+                n_jobs=effective_jobs,
+                backend='multiprocessing',
+            )(
+                delayed(run_replication_chunk)(
+                    chunk_id=i,
+                    warehouse_order_up_to=warehouse_order_up_to,
+                    instance_params=instance_params,
+                    trial_seed=trial.number,
+                    chunk_size=chunk_size,
+                    n_sims=N_SIMS,
+                )
+                for i in range(n_chunks)
+            )
+            
+            # Flatten and compute mean
+            all_costs = [cost for chunk in replication_results for cost in chunk]
+            return float(np.mean(all_costs))
+    
+    # Optuna controls everything: trial sampling, feedback loop, optimization
     study.optimize(
-        partial(objective, instance_params=instance_params),
+        parallel_objective,
         n_trials=n_trials,
-        n_jobs=n_jobs,
         gc_after_trial=True,
-        show_progress_bar=(n_jobs == 1),  # tqdm is not thread-safe with n_jobs > 1
+        n_jobs=2,
     )
 
     return study
@@ -202,13 +294,13 @@ def trials_to_dataframe(study: optuna.Study) -> pd.DataFrame:
 # Main
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Optuna inventory tuning study")
-    parser.add_argument("--trials", type=int, default=50, help="Total number of trials")
+    parser = argparse.ArgumentParser(description="Run Optuna inventory tuning study with joblib multiprocessing")
+    parser.add_argument("--trials", type=int, default=50, help="Total number of trials to run")
     parser.add_argument(
         "--jobs",
         type=int,
         default=1,
-        help="Parallel threads for study.optimize() (default: 1, use -1 for all cores)",
+        help="Parallel processes for joblib (1 = sequential, -1 = all cores)",
     )
     parser.add_argument("--study", type=str, default=STUDY_NAME, help="Study name")
     args = parser.parse_args()
@@ -217,12 +309,12 @@ if __name__ == "__main__":
         n_trials=args.trials,
         n_jobs=args.jobs,
         study_name=args.study,
-        instance_params=BASE_INSTANCE,  # Eventually we will replace with actual parameter instances we generated
+        instance_params=BASE_INSTANCE,
     )
 
     print_study_summary(study)
 
     df = trials_to_dataframe(study)
-    print("\n Trial results:")
+    print("\nTop 5 trial results:")
     print(df.head(5))
     df.to_csv('../results/test.csv')
