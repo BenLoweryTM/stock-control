@@ -27,3 +27,8 @@ Run Optuna code:
 cd ./tests/
 sbatch ./test_optunal_study.py
 ```
+
+What we want to do: 
+* Able to generate an instance file
+* Run the sample code for the LA for 12 different instances
+* Clearly then have everything we need for a framwworks to run the study
