@@ -1,9 +1,9 @@
 # base instance parameters
 import itertools
-from numpy import ma
-from pyarrow import json
-import pandas as pd
+
 import numpy as np
+import pandas as pd
+
 BASE_INSTANCE = {
     "periods": 16,
     "stores": 0,
@@ -23,21 +23,25 @@ BASE_INSTANCE = {
 }
 
 # Variables we are varing
-num_stores = [5,10,20]
+num_stores = [5, 10, 20]
 transhipment_costs = [1, 3]
 dfw_proportion = [0.2, 0.5, 0.8]
 holding_warehouse = [1, 3]
 
 instances = []
-for stores, ts_cost, dfw, holding in itertools.product(num_stores, transhipment_costs, dfw_proportion, holding_warehouse):
+for stores, ts_cost, dfw, holding in itertools.product(
+    num_stores, transhipment_costs, dfw_proportion, holding_warehouse
+):
     instance = BASE_INSTANCE.copy()
     instance["stores"] = stores
-    instance['cluster_assignment'] = [1 for i in range(stores)]
+    instance["cluster_assignment"] = [1 for i in range(stores)]
     instance["ts_cost_for_cluster"] = {1: ts_cost}
     instance["dfw_chance"] = dfw
-    instance['store_demand_params'] = [[max(np.random.poisson(10),1) for _ in range(16)] for _ in range(stores)]
+    instance["store_demand_params"] = [
+        [max(np.random.poisson(10), 1) for _ in range(16)] for _ in range(stores)
+    ]
     instance["holding_warehouse"] = holding
-    
+
     instances.append(instance)
 
 # Save to a pickle file
