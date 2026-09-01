@@ -1,6 +1,10 @@
 import numpy as np
 import pandas as pd
 from sklearn.datasets import make_blobs
+from methods.cluster import GriffinMedoid
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans
+import pickle as pkl
 
 TIME_HORIZON = 16
 NUM_STORES = [5, 10, 20]
@@ -106,9 +110,24 @@ def generate_cluster_instances(
                 random_state=random_state + trajectory * max(num_stores) + stores,
             )
 
+    instances = assign_clusters(instances)
     return instances
 
 
+def assign_clusters(cluster_instances):
+    for trajectory in range(5):
+        for stores in [10,20]:
+            loc = np.asarray(cluster_instances[trajectory][stores]['cluster_locations'])
+            dc =pd.DataFrame(cluster_instances[trajectory][stores]['demand']).T.corr().to_numpy()
+            cl = [i for i in range(2,max(int(len(loc)/2),3))]
+            kmeans_best = cl[np.argmax([silhouette_score(loc,KMeans(cl, random_state=37).fit_predict(loc, dc)) for cl in cl])]
+            griff_best = cl[np.argmax([silhouette_score(loc,GriffinMedoid(loc, dc, weight=0.5, clusters=cl).run_algorithm()) for cl in cl])]
+            cluster_instances[trajectory][stores]['Griffin Clusters']  = GriffinMedoid(loc, dc, weight=0.5, clusters=griff_best).run_algorithm()
+            cluster_instances[trajectory][stores]['KMeans Clusters']  = KMeans(n_clusters=kmeans_best, random_state=37).fit_predict(loc, dc)
+    return cluster_instances
+
 if __name__ == "__main__":
     cluster_instances = generate_cluster_instances()
-    pd.to_pickle(cluster_instances, OUTPUT_PATH)
+    with open(OUTPUT_PATH, 'wb') as f:
+        pkl.dump(cluster_instances, f)
+    

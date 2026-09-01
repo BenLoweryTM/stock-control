@@ -3,6 +3,7 @@ import itertools
 
 import numpy as np
 import pandas as pd
+import pickle as pkl
 
 BASE_INSTANCE = {
     "periods": 16,
@@ -16,7 +17,7 @@ BASE_INSTANCE = {
     "holding_warehouse": 1,
     "holding_store": 3,
     "initial_inventory": [[19, 0], [10, 0], [10, 0], [10, 0], [4, 0], [4, 0]],
-    "online_demand_params": [6 for _ in range(16)],
+    "online_demand_params": [],
     "store_demand_params": [],
     "demand_distribution": ["Poisson" for _ in range(6)],
     "dfw_chance": 0.2,
@@ -28,21 +29,56 @@ transhipment_costs = [1, 3]
 dfw_proportion = [0.2, 0.5, 0.8]
 holding_warehouse = [1, 3]
 
+# Import the clusters
+with open('./parameters/cluster_instances.pkl', 'rb') as f:
+    cluster_instances = pkl.load(f)
+
 instances = []
 for stores, ts_cost, dfw, holding in itertools.product(
     num_stores, transhipment_costs, dfw_proportion, holding_warehouse
 ):
-    instance = BASE_INSTANCE.copy()
-    instance["stores"] = stores
-    instance["cluster_assignment"] = [1 for i in range(stores)]
-    instance["ts_cost_for_cluster"] = {1: ts_cost}
-    instance["dfw_chance"] = dfw
-    instance["store_demand_params"] = [
-        [max(np.random.poisson(10), 1) for _ in range(16)] for _ in range(stores)
-    ]
-    instance["holding_warehouse"] = holding
+    for trajectory in range(5):
+        # If its 5 stores then the cluster arrangement is just all the same
+        if stores == 5:
+            instance = BASE_INSTANCE.copy()
+            instance["stores"] = stores
+            instance['trajectory"'] = trajectory
+            instance["cluster_method"] = "None"
+            instance["cluster_assignment"] = [1 for i in range(stores)]
+            instance["ts_cost_for_cluster"] = {1: ts_cost}
+            instance["dfw_chance"] = dfw
+            instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
+            instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
+            instance["holding_warehouse"] = holding
+            instances.append(instance)
+        else:
+            # KMEANS variant
+            instance = BASE_INSTANCE.copy()
+            instance["stores"] = stores
+            instance['trajectory"'] = trajectory
+            instance['cluster_method'] = "KM"
+            instance['cluster_assignment'] = cluster_instances[trajectory][stores]['KMeans Clusters']
+            instance["ts_cost_for_cluster"] = {cluster: ts_cost for cluster in np.unique(instance["cluster_assignment"])} 
+            instance["dfw_chance"] = dfw
+            instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
+            instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
+            instance["holding_warehouse"] = holding
 
-    instances.append(instance)
+            instances.append(instance)
+
+            # Griffin variant
+            instance = BASE_INSTANCE.copy()
+            instance["stores"] = stores
+            instance['trajectory"'] = trajectory
+            instance['cluster_method'] = "Griffin"
+            instance['cluster_assignment'] =  cluster_instances[trajectory][stores]['Griffin Clusters']
+            instance["ts_cost_for_cluster"] = {cluster: ts_cost for cluster in np.unique(instance["cluster_assignment"])}
+            instance["dfw_chance"] = dfw
+            instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
+            instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
+            instance["holding_warehouse"] = holding
+
+            instances.append(instance)
 
 # Save to a pickle file
 pd.to_pickle(instances, "./parameters/instances.pkl")
