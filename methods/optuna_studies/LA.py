@@ -1,7 +1,7 @@
 """
 Usage
 -----------------
-    uv run ./tests/test_optuna_study.py --jobs 8 --trials 100
+    uv run ./methods/optuna_studies/LA.py --jobs 8 --trials 100
 
 """
 

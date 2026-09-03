@@ -16,7 +16,7 @@ BASE_INSTANCE = {
     "penalty": 18,
     "holding_warehouse": 1,
     "holding_store": 3,
-    "initial_inventory": [[19, 0], [10, 0], [10, 0], [10, 0], [4, 0], [4, 0]],
+    "initial_inventory": [],
     "online_demand_params": [],
     "store_demand_params": [],
     "demand_distribution": ["Poisson" for _ in range(6)],

@@ -41,7 +41,7 @@ def generate_declining_poisson_demand(
         for period in range(periods):
             decline_steps = int(period // periods_per_decline)
             declined_rate = rate * ((1 - decline_rate) ** decline_steps)
-            store_demand.append(max(int(np.random.poisson(declined_rate)), 1))
+            store_demand.append(max(round(declined_rate,2), 0))  # Ensure non-negative demand
         demand.append(store_demand)
 
     return demand
