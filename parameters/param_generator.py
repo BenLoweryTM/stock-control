@@ -48,6 +48,7 @@ for stores, ts_cost, dfw, holding in itertools.product(
             instance["ts_cost_for_cluster"] = {1: ts_cost}
             instance["dfw_chance"] = dfw
             instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
+            instance["initial_inventory"] = [cluster_instances[trajectory][stores]['online_demand']+sum(cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores))] + [cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores-1)]
             instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
             instance["holding_warehouse"] = holding
             instances.append(instance)
@@ -62,6 +63,7 @@ for stores, ts_cost, dfw, holding in itertools.product(
             instance["dfw_chance"] = dfw
             instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
             instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
+            instance["initial_inventory"] = [cluster_instances[trajectory][stores]['online_demand']+sum(cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores))] + [cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores-1)]
             instance["holding_warehouse"] = holding
 
             instances.append(instance)
@@ -76,6 +78,7 @@ for stores, ts_cost, dfw, holding in itertools.product(
             instance["dfw_chance"] = dfw
             instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
             instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
+            instance["initial_inventory"] = [cluster_instances[trajectory][stores]['online_demand']+sum(cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores))] + [cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores-1)]
             instance["holding_warehouse"] = holding
 
             instances.append(instance)

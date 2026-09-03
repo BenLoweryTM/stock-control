@@ -1,7 +1,7 @@
 """
 Usage
 -----------------
-    uv run ./methods/optuna_studies/LA.py --jobs 8 --trials 100
+    uv run ./methods/optuna_studies/LA.py --jobs 8 --trials 100 --max_wh 1000
 
 """
 
@@ -171,6 +171,7 @@ def run_study(
     n_jobs: int = 1,
     study_name: str = STUDY_NAME,
     instance_params: dict = None,
+    max_wh: int = 50,
 ) -> optuna.Study:
     """
     Create and run an Optuna study with joblib multiprocessing.
@@ -191,6 +192,8 @@ def run_study(
         Human-readable name for the study.
     instance_params:
         Instance configuration dict.
+    max_wh:
+        Maximum warehouse order-up-to level to trial.
 
     Returns
     -------
@@ -220,8 +223,8 @@ def run_study(
         """
 
         # For Lookahead, we only tune the warehouse order-up-to level.
-        # Set a silly range
-        warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, 200)
+        # Use the max_wh parameter passed from the command line
+        warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", 0, max_wh)
 
         if effective_jobs == 1:
             # Sequential: just run normally
@@ -341,6 +344,9 @@ if __name__ == "__main__":
         default=None,
         help="Index of the instance to load from parameters/test_instances.pkl (if not specified, run an error)",
     )
+    parser.add_argument(
+        "--max_wh", type=int, default=250, help="Max warehouse order-up-to level to trial"
+    )
     args = parser.parse_args()
 
     if args.instance_idx is not None:
@@ -364,6 +370,7 @@ if __name__ == "__main__":
         n_jobs=args.jobs,
         study_name=args.study,
         instance_params=instance_params,
+        max_wh=args.max_wh,
     )
 
     print_study_summary(study)

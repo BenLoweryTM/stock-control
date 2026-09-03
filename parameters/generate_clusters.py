@@ -83,7 +83,7 @@ def generate_stores_with_demand(
         decline_rate=decline_rate,
         random_state=random_state,
     )
-    mean_demands = 2 * (sum(sum(store_demand) for store_demand in demand) / periods)
+    mean_demands = (sum(sum(store_demand) for store_demand in demand) / periods)
 
     return {
         "cluster_locations": tuple(map(tuple, locations.tolist())),
