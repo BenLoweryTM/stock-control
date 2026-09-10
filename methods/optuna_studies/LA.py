@@ -36,7 +36,9 @@ MAX_WH_DEMAND_FACTOR = 1.25
 # ---------------------------------------------------------------------------
 # Instance helpers
 # ---------------------------------------------------------------------------
-def load_instance(instance_idx: int, instances_path: Path = INSTANCES_PATH) -> dict[str, Any]:
+def load_instance(
+    instance_idx: int, instances_path: Path = INSTANCES_PATH
+) -> dict[str, Any]:
     """
     Load a single inventory instance from ``parameters/instances.pkl``.
 
@@ -69,11 +71,15 @@ def load_instance(instance_idx: int, instances_path: Path = INSTANCES_PATH) -> d
     with instances_path.open("rb") as file:
         instances = pickle.load(file)
 
-    if not isinstance(instances, list) or not all(isinstance(item, dict) for item in instances):
+    if not isinstance(instances, list) or not all(
+        isinstance(item, dict) for item in instances
+    ):
         raise TypeError(f"Expected {instances_path} to contain a list[dict].")
 
     if instance_idx < 0 or instance_idx >= len(instances):
-        raise ValueError(f"Instance index {instance_idx} out of range [0, {len(instances) - 1}]")
+        raise ValueError(
+            f"Instance index {instance_idx} out of range [0, {len(instances) - 1}]"
+        )
 
     return instances[instance_idx]
 
@@ -110,7 +116,9 @@ def demand_totals(instance_params: dict[str, Any]) -> tuple[float, float, float]
     total_demand = store_demand + online_demand
 
     if total_demand <= 0:
-        raise ValueError("Total store and online demand must be positive to infer warehouse bounds.")
+        raise ValueError(
+            "Total store and online demand must be positive to infer warehouse bounds."
+        )
 
     return store_demand, online_demand, total_demand
 
@@ -147,7 +155,9 @@ def infer_min_wh(
     return int(np.floor(online_demand * online_demand_factor))
 
 
-def infer_max_wh(instance_params: dict[str, Any], demand_factor: float = MAX_WH_DEMAND_FACTOR) -> int:
+def infer_max_wh(
+    instance_params: dict[str, Any], demand_factor: float = MAX_WH_DEMAND_FACTOR
+) -> int:
     """
     Infer a warehouse order-up-to search ceiling from total expected demand.
 
@@ -209,7 +219,9 @@ def instance_summary(
 
     return {
         "instance_idx": instance_idx,
-        "trajectory": instance_params.get("trajectory", instance_params.get("trajectory\"")),
+        "trajectory": instance_params.get(
+            "trajectory", instance_params.get('trajectory"')
+        ),
         "stores": instance_params.get("stores"),
         "periods": instance_params.get("periods"),
         "cluster_method": instance_params.get("cluster_method"),
@@ -282,7 +294,9 @@ def _normalise_initial_inventory(instance: dict[str, Any]) -> list[list[float]]:
     if (
         isinstance(initial_inventory, list)
         and len(initial_inventory) == stores + 1
-        and all(isinstance(item, list | tuple | np.ndarray) for item in initial_inventory)
+        and all(
+            isinstance(item, list | tuple | np.ndarray) for item in initial_inventory
+        )
     ):
         return [
             _as_pipeline_inventory(initial_inventory[0], warehouse_pipeline_length),
@@ -294,14 +308,20 @@ def _normalise_initial_inventory(instance: dict[str, Any]) -> list[list[float]]:
 
     store_demand_params = instance.get("store_demand_params")
     if store_demand_params is None:
-        raise ValueError("store_demand_params is required to normalise initial_inventory.")
+        raise ValueError(
+            "store_demand_params is required to normalise initial_inventory."
+        )
 
-    store_initial_inventory = [float(store_demand[0]) for store_demand in store_demand_params]
+    store_initial_inventory = [
+        float(store_demand[0]) for store_demand in store_demand_params
+    ]
     if initial_inventory:
         warehouse_initial_inventory = initial_inventory[0]
     else:
         online_demand_params = instance.get("online_demand_params", [0.0])
-        warehouse_initial_inventory = float(online_demand_params[0]) + sum(store_initial_inventory)
+        warehouse_initial_inventory = float(online_demand_params[0]) + sum(
+            store_initial_inventory
+        )
 
     return [
         _as_pipeline_inventory(warehouse_initial_inventory, warehouse_pipeline_length),
@@ -320,8 +340,10 @@ def _environment_params(instance: dict[str, Any]) -> dict[str, Any]:
     ``cluster_method`` for downstream analysis. Those fields should be retained
     for reporting but must not be forwarded to ``gym.make``.
     """
-    metadata_keys = {"trajectory", "trajectory\"", "cluster_method"}
-    env_params = {key: value for key, value in instance.items() if key not in metadata_keys}
+    metadata_keys = {"trajectory", 'trajectory"', "cluster_method"}
+    env_params = {
+        key: value for key, value in instance.items() if key not in metadata_keys
+    }
     env_params["initial_inventory"] = _normalise_initial_inventory(instance)
     return env_params
 
@@ -334,7 +356,9 @@ def _create_env(instance: dict[str, Any]) -> LA.ts_la:
     return wrapped_env
 
 
-def run_simulation(instance: dict[str, Any], warehouse_order_up_to: int, seed: int = 42) -> float:
+def run_simulation(
+    instance: dict[str, Any], warehouse_order_up_to: int, seed: int = 42
+) -> float:
     """
     Run N_SIMS replications of the DES and return the mean total cost.
 
@@ -373,7 +397,9 @@ def run_simulation(instance: dict[str, Any], warehouse_order_up_to: int, seed: i
 # ---------------------------------------------------------------------------
 # Optuna objective
 # ---------------------------------------------------------------------------
-def objective(trial: optuna.Trial, instance_params: dict[str, Any], max_wh: int) -> float:
+def objective(
+    trial: optuna.Trial, instance_params: dict[str, Any], max_wh: int
+) -> float:
     """
     Optuna objective function for the Lookahead policy.
 
@@ -434,7 +460,9 @@ def run_replication_chunk(
     costs = []
     env = _create_env(instance_params)
     n_full_chunks = n_sims // chunk_size
-    n_reps = chunk_size if chunk_id < n_full_chunks else n_sims - (chunk_id * chunk_size)
+    n_reps = (
+        chunk_size if chunk_id < n_full_chunks else n_sims - (chunk_id * chunk_size)
+    )
 
     if n_reps <= 0:
         return costs
@@ -518,18 +546,23 @@ def run_study(
 
     print(f"Running {n_trials} trials")
     print(f"Warehouse order-up-to search range: [{min_wh}, {max_wh}]")
-    print(f"Parallelising {N_SIMS} replications per trial across {effective_jobs} processes")
+    print(
+        f"Parallelising {N_SIMS} replications per trial across {effective_jobs} processes"
+    )
 
     def parallel_objective(trial: optuna.Trial) -> float:
         """
         Objective function: Optuna controls trial parameters,
         we parallelise replication sampling with joblib.
         """
-        warehouse_order_up_to = trial.suggest_int("warehouse_order_up_to", min_wh, max_wh)
-
+        warehouse_order_up_to = trial.suggest_int(
+            "warehouse_order_up_to", min_wh, max_wh
+        )
 
         if effective_jobs == 1:
-            return run_simulation(instance_params, warehouse_order_up_to, seed=trial.number)
+            return run_simulation(
+                instance_params, warehouse_order_up_to, seed=trial.number
+            )
 
         chunk_size = int(np.ceil(N_SIMS / effective_jobs))
         n_chunks = int(np.ceil(N_SIMS / chunk_size))
@@ -638,7 +671,12 @@ def trials_to_dataframe(
             rows.append(row)
 
     columns = ["min_wh", "max_wh", "trial", "mean_total_cost", "warehouse_order_up_to"]
-    return pd.DataFrame(rows).loc[:, columns].sort_values("mean_total_cost").reset_index(drop=True)
+    return (
+        pd.DataFrame(rows)
+        .loc[:, columns]
+        .sort_values("mean_total_cost")
+        .reset_index(drop=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +686,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run Optuna inventory tuning study with joblib multiprocessing"
     )
-    parser.add_argument("--trials", type=int, default=50, help="Total number of trials to run")
+    parser.add_argument(
+        "--trials", type=int, default=50, help="Total number of trials to run"
+    )
     parser.add_argument(
         "--jobs",
         type=int,
@@ -686,7 +726,9 @@ if __name__ == "__main__":
     max_wh = args.max_wh if args.max_wh is not None else infer_max_wh(instance_params)
     instance_params = {
         **instance_params,
-        "warehouse_capacity": max(int(instance_params.get("warehouse_capacity", 0)), max_wh),
+        "warehouse_capacity": max(
+            int(instance_params.get("warehouse_capacity", 0)), max_wh
+        ),
     }
     metadata = instance_summary(args.instance_idx, instance_params, min_wh, max_wh)
 

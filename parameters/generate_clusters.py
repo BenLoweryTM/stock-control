@@ -41,7 +41,9 @@ def generate_declining_poisson_demand(
         for period in range(periods):
             decline_steps = int(period // periods_per_decline)
             declined_rate = rate * ((1 - decline_rate) ** decline_steps)
-            store_demand.append(max(round(declined_rate,2), 0))  # Ensure non-negative demand
+            store_demand.append(
+                max(round(declined_rate, 2), 0)
+            )  # Ensure non-negative demand
         demand.append(store_demand)
 
     return demand
@@ -83,7 +85,7 @@ def generate_stores_with_demand(
         decline_rate=decline_rate,
         random_state=random_state,
     )
-    mean_demands = (sum(sum(store_demand) for store_demand in demand) / periods)
+    mean_demands = sum(sum(store_demand) for store_demand in demand) / periods
 
     return {
         "cluster_locations": tuple(map(tuple, locations.tolist())),
@@ -116,18 +118,47 @@ def generate_cluster_instances(
 
 def assign_clusters(cluster_instances):
     for trajectory in range(5):
-        for stores in [10,20]:
-            loc = np.asarray(cluster_instances[trajectory][stores]['cluster_locations'])
-            dc =pd.DataFrame(cluster_instances[trajectory][stores]['demand']).T.corr().to_numpy()
-            cl = [i for i in range(2,max(int(len(loc)/2),3))]
-            kmeans_best = cl[np.argmax([silhouette_score(loc,KMeans(cl, random_state=37).fit_predict(loc, dc)) for cl in cl])]
-            griff_best = cl[np.argmax([silhouette_score(loc,GriffinMedoid(loc, dc, weight=0.5, clusters=cl).run_algorithm()) for cl in cl])]
-            cluster_instances[trajectory][stores]['Griffin Clusters']  = GriffinMedoid(loc, dc, weight=0.5, clusters=griff_best).run_algorithm()
-            cluster_instances[trajectory][stores]['KMeans Clusters']  = KMeans(n_clusters=kmeans_best, random_state=37).fit_predict(loc, dc)
+        for stores in [10, 20]:
+            loc = np.asarray(cluster_instances[trajectory][stores]["cluster_locations"])
+            dc = (
+                pd.DataFrame(cluster_instances[trajectory][stores]["demand"])
+                .T.corr()
+                .to_numpy()
+            )
+            cl = [i for i in range(2, max(int(len(loc) / 2), 3))]
+            kmeans_best = cl[
+                np.argmax(
+                    [
+                        silhouette_score(
+                            loc, KMeans(cl, random_state=37).fit_predict(loc, dc)
+                        )
+                        for cl in cl
+                    ]
+                )
+            ]
+            griff_best = cl[
+                np.argmax(
+                    [
+                        silhouette_score(
+                            loc,
+                            GriffinMedoid(
+                                loc, dc, weight=0.5, clusters=cl
+                            ).run_algorithm(),
+                        )
+                        for cl in cl
+                    ]
+                )
+            ]
+            cluster_instances[trajectory][stores]["Griffin Clusters"] = GriffinMedoid(
+                loc, dc, weight=0.5, clusters=griff_best
+            ).run_algorithm()
+            cluster_instances[trajectory][stores]["KMeans Clusters"] = KMeans(
+                n_clusters=kmeans_best, random_state=37
+            ).fit_predict(loc, dc)
     return cluster_instances
+
 
 if __name__ == "__main__":
     cluster_instances = generate_cluster_instances()
-    with open(OUTPUT_PATH, 'wb') as f:
+    with open(OUTPUT_PATH, "wb") as f:
         pkl.dump(cluster_instances, f)
-    

@@ -30,7 +30,7 @@ dfw_proportion = [0.2, 0.5, 0.8]
 holding_warehouse = [1, 3]
 
 # Import the clusters
-with open('./parameters/cluster_instances.pkl', 'rb') as f:
+with open("./parameters/cluster_instances.pkl", "rb") as f:
     cluster_instances = pkl.load(f)
 
 instances = []
@@ -47,9 +47,23 @@ for stores, ts_cost, dfw, holding in itertools.product(
             instance["cluster_assignment"] = [1 for i in range(stores)]
             instance["ts_cost_for_cluster"] = {1: ts_cost}
             instance["dfw_chance"] = dfw
-            instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
-            instance["initial_inventory"] = [cluster_instances[trajectory][stores]['online_demand']+sum(cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores))] + [cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores-1)]
-            instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
+            instance["store_demand_params"] = cluster_instances[trajectory][stores][
+                "demand"
+            ]
+            instance["initial_inventory"] = [
+                cluster_instances[trajectory][stores]["online_demand"]
+                + sum(
+                    cluster_instances[trajectory][stores]["demand"][i][0]
+                    for i in range(stores)
+                )
+            ] + [
+                cluster_instances[trajectory][stores]["demand"][i][0]
+                for i in range(stores - 1)
+            ]
+            instance["online_demand_params"] = [
+                cluster_instances[trajectory][stores]["online_demand"]
+                for _ in range(instance["periods"])
+            ]
             instance["holding_warehouse"] = holding
             instances.append(instance)
         else:
@@ -57,13 +71,32 @@ for stores, ts_cost, dfw, holding in itertools.product(
             instance = BASE_INSTANCE.copy()
             instance["stores"] = stores
             instance['trajectory"'] = trajectory
-            instance['cluster_method'] = "KM"
-            instance['cluster_assignment'] = cluster_instances[trajectory][stores]['KMeans Clusters']
-            instance["ts_cost_for_cluster"] = {cluster: ts_cost for cluster in np.unique(instance["cluster_assignment"])} 
+            instance["cluster_method"] = "KM"
+            instance["cluster_assignment"] = cluster_instances[trajectory][stores][
+                "KMeans Clusters"
+            ]
+            instance["ts_cost_for_cluster"] = {
+                cluster: ts_cost
+                for cluster in np.unique(instance["cluster_assignment"])
+            }
             instance["dfw_chance"] = dfw
-            instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
-            instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
-            instance["initial_inventory"] = [cluster_instances[trajectory][stores]['online_demand']+sum(cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores))] + [cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores-1)]
+            instance["online_demand_params"] = [
+                cluster_instances[trajectory][stores]["online_demand"]
+                for _ in range(instance["periods"])
+            ]
+            instance["store_demand_params"] = cluster_instances[trajectory][stores][
+                "demand"
+            ]
+            instance["initial_inventory"] = [
+                cluster_instances[trajectory][stores]["online_demand"]
+                + sum(
+                    cluster_instances[trajectory][stores]["demand"][i][0]
+                    for i in range(stores)
+                )
+            ] + [
+                cluster_instances[trajectory][stores]["demand"][i][0]
+                for i in range(stores - 1)
+            ]
             instance["holding_warehouse"] = holding
 
             instances.append(instance)
@@ -72,13 +105,32 @@ for stores, ts_cost, dfw, holding in itertools.product(
             instance = BASE_INSTANCE.copy()
             instance["stores"] = stores
             instance['trajectory"'] = trajectory
-            instance['cluster_method'] = "Griffin"
-            instance['cluster_assignment'] =  cluster_instances[trajectory][stores]['Griffin Clusters']
-            instance["ts_cost_for_cluster"] = {cluster: ts_cost for cluster in np.unique(instance["cluster_assignment"])}
+            instance["cluster_method"] = "Griffin"
+            instance["cluster_assignment"] = cluster_instances[trajectory][stores][
+                "Griffin Clusters"
+            ]
+            instance["ts_cost_for_cluster"] = {
+                cluster: ts_cost
+                for cluster in np.unique(instance["cluster_assignment"])
+            }
             instance["dfw_chance"] = dfw
-            instance["store_demand_params"] = cluster_instances[trajectory][stores]['demand']
-            instance["online_demand_params"] = [cluster_instances[trajectory][stores]['online_demand'] for _ in range(instance['periods'])]
-            instance["initial_inventory"] = [cluster_instances[trajectory][stores]['online_demand']+sum(cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores))] + [cluster_instances[trajectory][stores]['demand'][i][0] for i in range(stores-1)]
+            instance["store_demand_params"] = cluster_instances[trajectory][stores][
+                "demand"
+            ]
+            instance["online_demand_params"] = [
+                cluster_instances[trajectory][stores]["online_demand"]
+                for _ in range(instance["periods"])
+            ]
+            instance["initial_inventory"] = [
+                cluster_instances[trajectory][stores]["online_demand"]
+                + sum(
+                    cluster_instances[trajectory][stores]["demand"][i][0]
+                    for i in range(stores)
+                )
+            ] + [
+                cluster_instances[trajectory][stores]["demand"][i][0]
+                for i in range(stores - 1)
+            ]
             instance["holding_warehouse"] = holding
 
             instances.append(instance)
