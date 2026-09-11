@@ -85,8 +85,13 @@ def generate_stores_with_demand(
         decline_rate=decline_rate,
         random_state=random_state,
     )
-    mean_demands = sum(sum(store_demand) for store_demand in demand) / periods
 
+    total_mean_demands = np.array(demand).sum(axis=0).mean()
+    # Sample online demand suniformly between 20% of this value either side of the mean
+    mean_demands = np.random.uniform(
+        low=total_mean_demands * 0.8, high=total_mean_demands * 1.2
+    )
+    print(mean_demands)
     return {
         "cluster_locations": tuple(map(tuple, locations.tolist())),
         "demand": demand,

@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INSTANCES_PATH = PROJECT_ROOT / "parameters" / "instances.pkl"
 RESULTS_DIR = PROJECT_ROOT / "results" / "LA"
 MIN_WH_ONLINE_DEMAND_FACTOR = 0.90
-MAX_WH_DEMAND_FACTOR = 1.25
+MAX_WH_DEMAND_FACTOR = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ def load_instance(
 
 def demand_totals(instance_params: dict[str, Any]) -> tuple[float, float, float]:
     """
-    Calculate total expected store, online, and combined demand for an instance.
+    Calculate expected store, online, and combined demand over the warehouse lead time.
 
     Parameters
     ----------
@@ -96,12 +96,13 @@ def demand_totals(instance_params: dict[str, Any]) -> tuple[float, float, float]
     Returns
     -------
     tuple[float, float, float]
-        Store demand total, online demand total, and combined total demand.
+        Store demand over the warehouse lead time, online demand over the warehouse
+        lead time, and combined lead-time demand.
 
     Raises
     ------
     ValueError
-        If required demand parameters are missing or total demand is not positive.
+        If required demand parameters are missing or lead-time demand is not positive.
     """
     store_demand_params = instance_params.get("store_demand_params")
     online_demand_params = instance_params.get("online_demand_params")
@@ -111,13 +112,27 @@ def demand_totals(instance_params: dict[str, Any]) -> tuple[float, float, float]
             "warehouse bounds."
         )
 
-    store_demand = float(np.sum(np.asarray(store_demand_params, dtype=float)))
-    online_demand = float(np.sum(np.asarray(online_demand_params, dtype=float)))
+    lead_time = instance_params.get("lead_time", [1, 1, 0])
+    warehouse_lead_time = int(lead_time[0])
+    if warehouse_lead_time <= 0:
+        raise ValueError("Warehouse lead time must be positive to infer warehouse bounds.")
+
+    store_demand_array = np.asarray(store_demand_params, dtype=float)
+    online_demand_array = np.asarray(online_demand_params, dtype=float)
+    lead_time_periods = min(
+        warehouse_lead_time,
+        store_demand_array.shape[-1],
+        online_demand_array.shape[0],
+    )
+
+    store_demand = float(np.sum(store_demand_array[..., :lead_time_periods]))
+    online_demand = float(np.sum(online_demand_array[:lead_time_periods]))
     total_demand = store_demand + online_demand
 
     if total_demand <= 0:
         raise ValueError(
-            "Total store and online demand must be positive to infer warehouse bounds."
+            "Store and online demand over the warehouse lead time must be positive to "
+            "infer warehouse bounds."
         )
 
     return store_demand, online_demand, total_demand
@@ -128,15 +143,15 @@ def infer_min_wh(
     online_demand_factor: float = MIN_WH_ONLINE_DEMAND_FACTOR,
 ) -> int:
     """
-    Infer the minimum warehouse order-up-to level from total expected online demand.
+    Infer the minimum warehouse order-up-to level from lead-time online demand.
 
     Parameters
     ----------
     instance_params : dict[str, Any]
         Instance dictionary loaded from ``parameters/instances.pkl``.
     online_demand_factor : float
-        Multiplier applied to total expected online demand. Values below 1 make the
-        lower bound a bit less than total expected online demand.
+        Multiplier applied to expected online demand over the warehouse lead time.
+        Values below 1 make the lower bound a bit less than lead-time online demand.
 
     Returns
     -------
@@ -159,19 +174,20 @@ def infer_max_wh(
     instance_params: dict[str, Any], demand_factor: float = MAX_WH_DEMAND_FACTOR
 ) -> int:
     """
-    Infer a warehouse order-up-to search ceiling from total expected demand.
+    Infer a warehouse order-up-to search ceiling from lead-time demand.
 
     ``parameters/param_generator.py`` stores ``store_demand_params`` as one demand-rate
     trajectory per store and ``online_demand_params`` as one demand rate per period.
-    The inferred ceiling is deliberately above total expected store + online demand,
-    but bounded to a simple demand multiple so Optuna does not search implausibly huge values.
+    The inferred ceiling is deliberately above expected store + online demand over the
+    warehouse lead time, but bounded to a simple demand multiple so Optuna does not
+    search implausibly huge values.
 
     Parameters
     ----------
     instance_params : dict[str, Any]
         Instance dictionary loaded from ``parameters/instances.pkl``.
     demand_factor : float
-        Multiplier applied to total expected demand. Must be greater than 1.
+        Multiplier applied to lead-time demand. Must be greater than 1.
 
     Returns
     -------
@@ -216,7 +232,7 @@ def instance_summary(
         Flat metadata suitable for adding to a CSV of trial results.
     """
     store_demand, online_demand, total_demand = demand_totals(instance_params)
-
+    print(online_demand)
     return {
         "instance_idx": instance_idx,
         "trajectory": instance_params.get(
