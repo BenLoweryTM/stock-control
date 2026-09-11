@@ -360,6 +360,10 @@ def _environment_params(instance: dict[str, Any]) -> dict[str, Any]:
     env_params = {
         key: value for key, value in instance.items() if key not in metadata_keys
     }
+    stores = int(instance["stores"])
+    demand_distribution = env_params.get("demand_distribution")
+    if demand_distribution is None or len(demand_distribution) != stores + 1:
+        env_params["demand_distribution"] = ["Poisson" for _ in range(stores + 1)]
     env_params["initial_inventory"] = _normalise_initial_inventory(instance)
     return env_params
 
