@@ -402,16 +402,20 @@ def run_simulation(
     all_period_costs: list[float] = []
 
     for _ in range(N_SIMS):
-        sim_costs = []
-        terminated = False
-        while not terminated:
-            action = wrapped_env.generate_action(warehouse_order_up_to, True, "RegBS")
-            _, reward, terminated, _, _ = wrapped_env.step(action)
-            sim_costs.append(-reward)
-        all_period_costs.append(float(np.sum(sim_costs)))
-        wrapped_env.reset()
+        try:
+            sim_costs = []
+            terminated = False
+            while not terminated:
+                action = wrapped_env.generate_action(warehouse_order_up_to, True, "RegBS")
+                _, reward, terminated, _, _ = wrapped_env.step(action)
+                sim_costs.append(-reward)
+            all_period_costs.append(float(np.sum(sim_costs)))
+            wrapped_env.reset()
+        except Exception as e:  # noqa: BLE001
+            print(f"[Warning] Simulation replication failed and was skipped: {e}")
+            wrapped_env.reset()
 
-    return float(np.mean(all_period_costs))
+    return float(np.mean(all_period_costs)) if all_period_costs else float("inf")
 
 
 # ---------------------------------------------------------------------------
@@ -489,14 +493,18 @@ def run_replication_chunk(
 
     env.reset(seed=trial_seed + chunk_id)
     for _ in range(n_reps):
-        sim_costs = []
-        terminated = False
-        while not terminated:
-            action = env.generate_action(warehouse_order_up_to, True, "RegBS")
-            _, reward, terminated, _, _ = env.step(action)
-            sim_costs.append(-reward)
-        costs.append(float(np.sum(sim_costs)))
-        env.reset()
+        try:
+            sim_costs = []
+            terminated = False
+            while not terminated:
+                action = env.generate_action(warehouse_order_up_to, True, "RegBS")
+                _, reward, terminated, _, _ = env.step(action)
+                sim_costs.append(-reward)
+            costs.append(float(np.sum(sim_costs)))
+            env.reset()
+        except Exception as e:  # noqa: BLE001
+            print(f"[Warning] Simulation replication failed and was skipped: {e}")
+            env.reset()
 
     return costs
 
