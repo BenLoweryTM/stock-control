@@ -15,7 +15,7 @@ BASE_INSTANCE = {
     "dfw_cost": 0,
     "penalty": 18,
     "holding_warehouse": 1,
-    "holding_store": 3,
+    "holding_store": 1,
     "initial_inventory": [],
     "online_demand_params": [],
     "store_demand_params": [],
@@ -27,7 +27,7 @@ BASE_INSTANCE = {
 num_stores = [5, 10, 20]
 transhipment_costs = [1, 3]
 dfw_proportion = [0.2, 0.5, 0.8]
-holding_warehouse = [1, 3]
+holding_store = [1, 3]
 
 # Import the clusters
 with open("./parameters/cluster_instances.pkl", "rb") as f:
@@ -35,7 +35,7 @@ with open("./parameters/cluster_instances.pkl", "rb") as f:
 
 instances = []
 for stores, ts_cost, dfw, holding in itertools.product(
-    num_stores, transhipment_costs, dfw_proportion, holding_warehouse
+    num_stores, transhipment_costs, dfw_proportion, holding_store
 ):
     for trajectory in range(5):
         # If its 5 stores then the cluster arrangement is just all the same
@@ -64,7 +64,7 @@ for stores, ts_cost, dfw, holding in itertools.product(
                 cluster_instances[trajectory][stores]["online_demand"]
                 for _ in range(instance["periods"])
             ]
-            instance["holding_warehouse"] = holding
+            instance["holding_store"] = holding
             instances.append(instance)
         else:
             # KMEANS variant
@@ -97,7 +97,7 @@ for stores, ts_cost, dfw, holding in itertools.product(
                 cluster_instances[trajectory][stores]["demand"][i][0]
                 for i in range(stores - 1)
             ]
-            instance["holding_warehouse"] = holding
+            instance["holding_store"] = holding
 
             instances.append(instance)
 
@@ -131,7 +131,7 @@ for stores, ts_cost, dfw, holding in itertools.product(
                 cluster_instances[trajectory][stores]["demand"][i][0]
                 for i in range(stores - 1)
             ]
-            instance["holding_warehouse"] = holding
+            instance["holding_store"] = holding
 
             instances.append(instance)
 
