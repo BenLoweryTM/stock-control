@@ -1,0 +1,673 @@
+"""
+Optuna study for the Capped no transhipment (CNTS) heuristic.
+
+Warehouse inventory follows a regular base-stock policy; the order-up-to level
+is the tuned parameter (same search space as LA.py).
+
+Store inventory follows a capped base-stock policy where each store's order-up-to
+level is the inverse CDF of lead-time demand (LTD) evaluated at a shared Critical
+Fractile CF, and the order cap r_i is a fraction eta of that base-stock level:
+
+    S_i = F_i^{-1}(CF),   F_i ~ Poisson(sum of store_demand_params[i] over store lead time)
+    r_i = floor(eta * S_i)
+
+CF ∈ (0, 1) and eta ∈ (0, 1) are shared across all stores and are tuned parameters.
+
+Usage
+-----------------
+    uv run ./methods/optuna_studies/CNTS.py --jobs 8 --trials 100 --instance-idx 0
+    uv run ./methods/optuna_studies/CNTS.py --jobs 8 --trials 100 --instance-idx 0 --max-wh 1000
+"""
+
+from __future__ import annotations
+
+import argparse
+import pickle
+import re
+from multiprocessing import cpu_count
+from pathlib import Path
+from typing import Any
+
+import gymnasium as gym
+import inventorygyms  # noqa: F401
+import inventorygyms.wrappers.transhipment.ESR_rust as ESR
+import numpy as np
+import optuna
+import pandas as pd
+import scipy.stats as sp
+from joblib import Parallel, delayed
+
+N_SIMS = 5000
+
+STUDY_NAME = "inventory_tuning"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INSTANCES_PATH = PROJECT_ROOT / "parameters" / "instances.pkl"
+RESULTS_DIR = PROJECT_ROOT / "results" / "CNTS"
+MIN_WH_ONLINE_DEMAND_FACTOR = 0.90
+MAX_WH_DEMAND_FACTOR = 2.0
+
+
+# ---------------------------------------------------------------------------
+# Instance helpers
+# ---------------------------------------------------------------------------
+def load_instance(
+    instance_idx: int, instances_path: Path = INSTANCES_PATH
+) -> dict[str, Any]:
+    if not instances_path.exists():
+        raise FileNotFoundError(
+            f"Could not find {instances_path}. Generate it with parameters/param_generator.py first."
+        )
+    with instances_path.open("rb") as file:
+        instances = pickle.load(file)
+    if not isinstance(instances, list) or not all(
+        isinstance(item, dict) for item in instances
+    ):
+        raise TypeError(f"Expected {instances_path} to contain a list[dict].")
+    if instance_idx < 0 or instance_idx >= len(instances):
+        raise ValueError(
+            f"Instance index {instance_idx} out of range [0, {len(instances) - 1}]"
+        )
+    return instances[instance_idx]
+
+
+def demand_totals(instance_params: dict[str, Any]) -> tuple[float, float, float]:
+    store_demand_params = instance_params.get("store_demand_params")
+    online_demand_params = instance_params.get("online_demand_params")
+    if store_demand_params is None or online_demand_params is None:
+        raise ValueError(
+            "Instance must contain store_demand_params and online_demand_params to infer "
+            "warehouse bounds."
+        )
+    lead_time = instance_params.get("lead_time", [1, 1, 0])
+    warehouse_lead_time = int(lead_time[0])
+    if warehouse_lead_time <= 0:
+        raise ValueError(
+            "Warehouse lead time must be positive to infer warehouse bounds."
+        )
+    store_demand_array = np.asarray(store_demand_params, dtype=float)
+    online_demand_array = np.asarray(online_demand_params, dtype=float)
+    lead_time_periods = min(
+        warehouse_lead_time,
+        store_demand_array.shape[-1],
+        online_demand_array.shape[0],
+    )
+    store_demand = float(np.sum(store_demand_array[..., :lead_time_periods]))
+    online_demand = float(np.sum(online_demand_array[:lead_time_periods]))
+    total_demand = store_demand + online_demand
+    if total_demand <= 0:
+        raise ValueError(
+            "Store and online demand over the warehouse lead time must be positive to "
+            "infer warehouse bounds."
+        )
+    return store_demand, online_demand, total_demand
+
+
+def infer_min_wh(
+    instance_params: dict[str, Any],
+    online_demand_factor: float = MIN_WH_ONLINE_DEMAND_FACTOR,
+) -> int:
+    if online_demand_factor <= 0 or online_demand_factor > 1:
+        raise ValueError("online_demand_factor must be in the interval (0, 1].")
+    _, online_demand, _ = demand_totals(instance_params)
+    return int(np.floor(online_demand * online_demand_factor))
+
+
+def infer_max_wh(
+    instance_params: dict[str, Any], demand_factor: float = MAX_WH_DEMAND_FACTOR
+) -> int:
+    if demand_factor <= 1:
+        raise ValueError("demand_factor must be greater than 1.")
+    _, _, total_demand = demand_totals(instance_params)
+    return int(np.ceil(total_demand * demand_factor))
+
+
+def instance_summary(
+    instance_idx: int,
+    instance_params: dict[str, Any],
+    min_wh: int,
+    max_wh: int,
+) -> dict[str, Any]:
+    store_demand, online_demand, total_demand = demand_totals(instance_params)
+    print(online_demand)
+    return {
+        "instance_idx": instance_idx,
+        "trajectory": instance_params.get(
+            "trajectory", instance_params.get('trajectory"')
+        ),
+        "stores": instance_params.get("stores"),
+        "periods": instance_params.get("periods"),
+        "cluster_method": instance_params.get("cluster_method"),
+        "dfw_chance": instance_params.get("dfw_chance"),
+        "holding_warehouse": instance_params.get("holding_warehouse"),
+        "holding_store": instance_params.get("holding_store"),
+        "penalty": instance_params.get("penalty"),
+        "store_demand_total": store_demand,
+        "online_demand_total": online_demand,
+        "total_demand": total_demand,
+        "min_wh": min_wh,
+        "max_wh": max_wh,
+    }
+
+
+def build_output_path(output_dir: Path, study_name: str, instance_idx: int) -> Path:
+    safe_study_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", study_name).strip("_")
+    return output_dir / f"instance_{instance_idx}_{safe_study_name}.csv"
+
+
+# ---------------------------------------------------------------------------
+# CNTS-specific helpers
+# ---------------------------------------------------------------------------
+def _as_pipeline_inventory(value: Any, pipeline_length: int) -> list[float]:
+    if isinstance(value, list | tuple | np.ndarray):
+        return [float(item) for item in value]
+    return [float(value), *([0.0] * (pipeline_length - 1))]
+
+
+def _normalise_initial_inventory(instance: dict[str, Any]) -> list[list[float]]:
+    lead_time = instance.get("lead_time", [1, 1, 0])
+    warehouse_pipeline_length = int(lead_time[0]) + 1
+    store_pipeline_length = int(lead_time[1]) + 1
+    stores = int(instance["stores"])
+    initial_inventory = instance.get("initial_inventory", [])
+
+    if (
+        isinstance(initial_inventory, list)
+        and len(initial_inventory) == stores + 1
+        and all(
+            isinstance(item, list | tuple | np.ndarray) for item in initial_inventory
+        )
+    ):
+        return [
+            _as_pipeline_inventory(initial_inventory[0], warehouse_pipeline_length),
+            *[
+                _as_pipeline_inventory(store_inventory, store_pipeline_length)
+                for store_inventory in initial_inventory[1:]
+            ],
+        ]
+
+    store_demand_params = instance.get("store_demand_params")
+    if store_demand_params is None:
+        raise ValueError(
+            "store_demand_params is required to normalise initial_inventory."
+        )
+    store_initial_inventory = [
+        float(store_demand[0]) for store_demand in store_demand_params
+    ]
+    if initial_inventory:
+        warehouse_initial_inventory = initial_inventory[0]
+    else:
+        online_demand_params = instance.get("online_demand_params", [0.0])
+        warehouse_initial_inventory = float(online_demand_params[0]) + sum(
+            store_initial_inventory
+        )
+    return [
+        _as_pipeline_inventory(warehouse_initial_inventory, warehouse_pipeline_length),
+        *[
+            _as_pipeline_inventory(store_inventory, store_pipeline_length)
+            for store_inventory in store_initial_inventory
+        ],
+    ]
+
+
+def _environment_params(instance: dict[str, Any]) -> dict[str, Any]:
+    metadata_keys = {"trajectory", 'trajectory"', "cluster_method"}
+    env_params = {
+        key: value for key, value in instance.items() if key not in metadata_keys
+    }
+    stores = int(instance["stores"])
+    demand_distribution = env_params.get("demand_distribution")
+    if demand_distribution is None or len(demand_distribution) != stores + 1:
+        env_params["demand_distribution"] = ["Poisson" for _ in range(stores + 1)]
+    env_params["initial_inventory"] = _normalise_initial_inventory(instance)
+    return env_params
+
+
+def _create_env(instance: dict[str, Any]) -> ESR.ts_ESR:
+    """Create a fresh ESR-wrapped environment (safe for multiprocessing)."""
+    env = gym.make("inventorygyms/TwoEchelonPLSTS-v0", **_environment_params(instance))
+    wrapped_env = ESR.ts_ESR(env)
+    wrapped_env.reset()
+    return wrapped_env
+
+
+def _compute_store_base_stocks(instance: dict[str, Any], cf: float) -> list[int]:
+    """
+    Compute the base-stock level for each store via the inverse CDF of LTD.
+
+        S_i = F_i^{-1}(CF),   F_i ~ Poisson(sum of store_demand_params[i] over store lead time)
+    """
+    store_demand_params = instance["store_demand_params"]
+    lead_time = instance.get("lead_time", [1, 1, 0])
+    store_lead_time = int(lead_time[1])
+
+    base_stocks: list[int] = []
+    for store_params in store_demand_params:
+        ltd_periods = min(store_lead_time + 1, len(store_params))
+        ltd_mean = float(np.sum(store_params[:ltd_periods]))
+        s_i = int(sp.poisson(ltd_mean).ppf(cf))
+        base_stocks.append(s_i)
+    return base_stocks
+
+
+def _compute_order_caps(store_base_stocks: list[int], eta: float) -> list[int]:
+    """
+    Compute the per-store order cap r_i = floor(eta * S_i).
+
+    Parameters
+    ----------
+    store_base_stocks : list[int]
+        Per-store base-stock levels S_i.
+    eta : float
+        Cap multiplier in (0, 1).
+
+    Returns
+    -------
+    list[int]
+        Per-store order caps.
+    """
+    return [int(np.floor(eta * s)) for s in store_base_stocks]
+
+
+# ---------------------------------------------------------------------------
+# Simulation runner
+# ---------------------------------------------------------------------------
+def run_simulation(
+    instance: dict[str, Any],
+    warehouse_order_up_to: int,
+    cf: float,
+    eta: float,
+    seed: int = 42,
+) -> float:
+    """
+    Run N_SIMS replications of the CNTS policy and return the mean total cost.
+
+    Parameters
+    ----------
+    instance : dict[str, Any]
+        Environment kwargs forwarded to ``gym.make``.
+    warehouse_order_up_to : int
+        Warehouse regular base-stock level.
+    cf : float
+        Critical fractile used to set store base-stock levels.
+    eta : float
+        Cap multiplier: r_i = floor(eta * S_i).
+    seed : int
+        RNG seed for reproducibility.
+
+    Returns
+    -------
+    float
+        Mean total cost per replication. Lower is better.
+    """
+    store_base_stocks = _compute_store_base_stocks(instance, cf)
+    ordering_action = {
+        "warehouse": warehouse_order_up_to,
+        "store": store_base_stocks,
+        "r": _compute_order_caps(store_base_stocks, eta),
+    }
+
+    wrapped_env = _create_env(instance)
+    wrapped_env.reset(seed=seed)
+    all_period_costs: list[float] = []
+
+    for _ in range(N_SIMS):
+        try:
+            sim_costs = []
+            terminated = False
+            while not terminated:
+                action = wrapped_env.generate_action("Capped", ordering_action, False)
+                _, reward, terminated, _, _ = wrapped_env.step(action)
+                sim_costs.append(-reward)
+            all_period_costs.append(float(np.sum(sim_costs)))
+            wrapped_env.reset()
+        except Exception as e:  # noqa: BLE001
+            print(f"[Warning] Simulation replication failed and was skipped: {e}")
+            wrapped_env.reset()
+
+    return float(np.mean(all_period_costs)) if all_period_costs else float("inf")
+
+
+# ---------------------------------------------------------------------------
+# Parallel trial executor (module-level for pickling with joblib)
+# ---------------------------------------------------------------------------
+def run_replication_chunk(
+    chunk_id: int,
+    warehouse_order_up_to: int,
+    store_base_stocks: list[int],
+    order_caps: list[int],
+    instance_params: dict[str, Any],
+    trial_seed: int,
+    chunk_size: int,
+    n_sims: int,
+) -> list[float]:
+    """
+    Run a chunk of Monte Carlo replications in parallel.
+
+    This must be at module level (not nested) to be picklable by joblib.
+
+    Parameters
+    ----------
+    chunk_id : int
+        Which chunk (0, 1, 2, ...) to run.
+    warehouse_order_up_to : int
+        Warehouse base-stock level for this trial.
+    store_base_stocks : list[int]
+        Per-store base-stock levels S_i.
+    order_caps : list[int]
+        Per-store order caps r_i = floor(eta * S_i).
+    instance_params : dict[str, Any]
+        Instance configuration.
+    trial_seed : int
+        Base seed for reproducibility.
+    chunk_size : int
+        Number of replications per chunk.
+    n_sims : int
+        Total replications, used to size the final chunk correctly.
+
+    Returns
+    -------
+    list[float]
+        Total costs for each replication in this chunk.
+    """
+    ordering_action = {
+        "warehouse": warehouse_order_up_to,
+        "store": store_base_stocks,
+        "r": order_caps,
+    }
+
+    costs = []
+    env = _create_env(instance_params)
+    n_full_chunks = n_sims // chunk_size
+    n_reps = (
+        chunk_size if chunk_id < n_full_chunks else n_sims - (chunk_id * chunk_size)
+    )
+    if n_reps <= 0:
+        return costs
+
+    env.reset(seed=trial_seed + chunk_id)
+    for _ in range(n_reps):
+        try:
+            sim_costs = []
+            terminated = False
+            while not terminated:
+                action = env.generate_action("Capped", ordering_action, False)
+                _, reward, terminated, _, _ = env.step(action)
+                sim_costs.append(-reward)
+            costs.append(float(np.sum(sim_costs)))
+            env.reset()
+        except Exception as e:  # noqa: BLE001
+            print(f"[Warning] Simulation replication failed and was skipped: {e}")
+            env.reset()
+
+    return costs
+
+
+# ---------------------------------------------------------------------------
+# Study entry-point
+# ---------------------------------------------------------------------------
+def run_study(
+    n_trials: int = 50,
+    n_jobs: int = 1,
+    study_name: str = STUDY_NAME,
+    instance_params: dict[str, Any] | None = None,
+    min_wh: int = 0,
+    max_wh: int = 50,
+) -> optuna.Study:
+    """
+    Create and run an Optuna study for the CNTS policy.
+
+    Three parameters are tuned jointly:
+    - ``warehouse_order_up_to`` (int) – warehouse regular base-stock level.
+    - ``CF`` (float in (0, 1)) – critical fractile for store base-stock levels.
+    - ``eta`` (float in (0, 1)) – cap multiplier: r_i = floor(eta * S_i).
+
+    Parameters
+    ----------
+    n_trials : int
+        Total number of Optuna trials to run.
+    n_jobs : int
+        Number of parallel processes for replications. Use ``-1`` for all cores.
+    study_name : str
+        Human-readable name for the study.
+    instance_params : dict[str, Any] | None
+        Instance configuration dictionary.
+    min_wh : int
+        Minimum warehouse order-up-to level to trial.
+    max_wh : int
+        Maximum warehouse order-up-to level to trial.
+
+    Returns
+    -------
+    optuna.Study
+        The completed study.
+    """
+    if instance_params is None:
+        raise ValueError("instance_params must be provided.")
+    if min_wh < 0:
+        raise ValueError("min_wh must be non-negative.")
+    if max_wh <= min_wh:
+        raise ValueError("max_wh must be greater than min_wh.")
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    sampler = optuna.samplers.TPESampler(seed=42)
+    study = optuna.create_study(
+        direction="minimize",
+        study_name=study_name,
+        sampler=sampler,
+    )
+
+    effective_jobs = cpu_count() if n_jobs == -1 else n_jobs
+    effective_jobs = max(1, min(effective_jobs, N_SIMS))
+
+    print(f"Running {n_trials} trials")
+    print(f"Warehouse order-up-to search range: [{min_wh}, {max_wh}]")
+    print(f"Critical fractile (CF) search range: (0, 1)")
+    print(f"Cap multiplier (eta) search range: (0, 1)")
+    print(
+        f"Parallelising {N_SIMS} replications per trial across {effective_jobs} processes"
+    )
+
+    def parallel_objective(trial: optuna.Trial) -> float:
+        warehouse_order_up_to = trial.suggest_int(
+            "warehouse_order_up_to", min_wh, max_wh
+        )
+        cf = trial.suggest_float("CF", 1e-6, 1.0 - 1e-6)
+        eta = trial.suggest_float("eta", 1e-6, 1.0 - 1e-6)
+
+        store_base_stocks = _compute_store_base_stocks(instance_params, cf)
+        order_caps = _compute_order_caps(store_base_stocks, eta)
+
+        if effective_jobs == 1:
+            return run_simulation(
+                instance_params, warehouse_order_up_to, cf, eta, seed=trial.number
+            )
+
+        chunk_size = int(np.ceil(N_SIMS / effective_jobs))
+        n_chunks = int(np.ceil(N_SIMS / chunk_size))
+
+        replication_results = Parallel(
+            n_jobs=effective_jobs,
+            backend="multiprocessing",
+        )(
+            delayed(run_replication_chunk)(
+                chunk_id=i,
+                warehouse_order_up_to=warehouse_order_up_to,
+                store_base_stocks=store_base_stocks,
+                order_caps=order_caps,
+                instance_params=instance_params,
+                trial_seed=trial.number,
+                chunk_size=chunk_size,
+                n_sims=N_SIMS,
+            )
+            for i in range(n_chunks)
+        )
+
+        all_costs = [cost for chunk in replication_results for cost in chunk]
+        return float(np.mean(all_costs))
+
+    param_counts: dict[tuple, int] = {}
+
+    def convergence_tracking_callback(study: optuna.Study, trial: optuna.Trial) -> None:
+        if trial.state != optuna.trial.TrialState.COMPLETE:
+            return
+        wh = trial.params.get("warehouse_order_up_to")
+        if wh is None:
+            return
+        cf_rounded = round(trial.params.get("CF", 0.0), 2)
+        eta_rounded = round(trial.params.get("eta", 0.0), 2)
+        key = (wh, cf_rounded, eta_rounded)
+        param_counts[key] = param_counts.get(key, 0) + 1
+        count = param_counts[key]
+
+        if count == 2:
+            print(
+                f"\n[Convergence] warehouse_order_up_to={wh}, CF≈{cf_rounded}, "
+                f"eta≈{eta_rounded} suggested again (2nd time)"
+            )
+        elif count > 2 and count % 5 == 0:
+            print(
+                f"[Convergence] warehouse_order_up_to={wh}, CF≈{cf_rounded}, "
+                f"eta≈{eta_rounded} suggested {count} times"
+            )
+        if count == 10:
+            print(
+                f"\n[Convergence] warehouse_order_up_to={wh}, CF≈{cf_rounded}, "
+                f"eta≈{eta_rounded} suggested 10 times. Stopping study."
+            )
+            study.stop()
+
+    study.optimize(
+        parallel_objective,
+        n_trials=n_trials,
+        gc_after_trial=True,
+        n_jobs=1,
+        callbacks=[convergence_tracking_callback],
+    )
+
+    return study
+
+
+# ---------------------------------------------------------------------------
+# Reporting helpers
+# ---------------------------------------------------------------------------
+def print_study_summary(study: optuna.Study) -> None:
+    print("\n=== Optuna Study Summary ===")
+    print(f"  Best value  : {study.best_value:.4f}  (mean total cost)")
+    print(f"  Best params : {study.best_params}")
+    print(f"  Trials run  : {len(study.trials)}")
+
+
+def trials_to_dataframe(
+    study: optuna.Study,
+    metadata: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    rows = []
+    for trial in study.trials:
+        if trial.state == optuna.trial.TrialState.COMPLETE:
+            row = {
+                "trial": trial.number,
+                "mean_total_cost": trial.value,
+                **trial.params,
+            }
+            if metadata is not None:
+                row = {**metadata, **row}
+            rows.append(row)
+
+    columns = [
+        "min_wh",
+        "max_wh",
+        "trial",
+        "mean_total_cost",
+        "warehouse_order_up_to",
+        "CF",
+        "eta",
+    ]
+    return (
+        pd.DataFrame(rows)
+        .loc[:, columns]
+        .sort_values("mean_total_cost")
+        .reset_index(drop=True)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Run Optuna CNTS inventory tuning study with joblib multiprocessing"
+    )
+    parser.add_argument(
+        "--trials", type=int, default=50, help="Total number of trials to run"
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Parallel processes for joblib (1 = sequential, -1 = all cores)",
+    )
+    parser.add_argument("--study", type=str, default=STUDY_NAME, help="Study name")
+    parser.add_argument(
+        "--instance-idx",
+        type=int,
+        required=True,
+        help="Index of the instance to load from parameters/instances.pkl",
+    )
+    parser.add_argument(
+        "--max-wh",
+        "--max_wh",
+        dest="max_wh",
+        type=int,
+        default=None,
+        help=(
+            "Max warehouse order-up-to level to trial. If omitted, this is inferred as "
+            f"ceil((total store demand + total online demand) * {MAX_WH_DEMAND_FACTOR})."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=RESULTS_DIR,
+        help="Directory where trial-level CSV results should be saved",
+    )
+    args = parser.parse_args()
+
+    instance_params = load_instance(args.instance_idx)
+    min_wh = infer_min_wh(instance_params)
+    max_wh = args.max_wh if args.max_wh is not None else infer_max_wh(instance_params)
+    instance_params = {
+        **instance_params,
+        "warehouse_capacity": max(
+            int(instance_params.get("warehouse_capacity", 0)), max_wh
+        ),
+    }
+    metadata = instance_summary(args.instance_idx, instance_params, min_wh, max_wh)
+
+    print(f"Loaded instance {args.instance_idx} from {INSTANCES_PATH}")
+    print(
+        "Demand totals: "
+        f"stores={metadata['store_demand_total']:.2f}, "
+        f"online={metadata['online_demand_total']:.2f}, "
+        f"combined={metadata['total_demand']:.2f}"
+    )
+
+    study = run_study(
+        n_trials=args.trials,
+        n_jobs=args.jobs,
+        study_name=args.study,
+        instance_params=instance_params,
+        min_wh=min_wh,
+        max_wh=max_wh,
+    )
+
+    print_study_summary(study)
+
+    df = trials_to_dataframe(study, metadata=metadata)
+    print("\nTop 5 trial results:")
+    print(df.head(5))
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = build_output_path(args.output_dir, args.study, args.instance_idx)
+    df.to_csv(output_path, index=False)
+    print(f"Saved trial results to {output_path}")

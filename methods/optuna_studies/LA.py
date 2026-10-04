@@ -115,7 +115,9 @@ def demand_totals(instance_params: dict[str, Any]) -> tuple[float, float, float]
     lead_time = instance_params.get("lead_time", [1, 1, 0])
     warehouse_lead_time = int(lead_time[0])
     if warehouse_lead_time <= 0:
-        raise ValueError("Warehouse lead time must be positive to infer warehouse bounds.")
+        raise ValueError(
+            "Warehouse lead time must be positive to infer warehouse bounds."
+        )
 
     store_demand_array = np.asarray(store_demand_params, dtype=float)
     online_demand_array = np.asarray(online_demand_params, dtype=float)
@@ -406,7 +408,9 @@ def run_simulation(
             sim_costs = []
             terminated = False
             while not terminated:
-                action = wrapped_env.generate_action(warehouse_order_up_to, True, "RegBS")
+                action = wrapped_env.generate_action(
+                    warehouse_order_up_to, True, "RegBS"
+                )
                 _, reward, terminated, _, _ = wrapped_env.step(action)
                 sim_costs.append(-reward)
             all_period_costs.append(float(np.sum(sim_costs)))
